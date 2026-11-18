@@ -1,0 +1,7 @@
+.page { padding: 24rpx 0 60rpx; }
+.state { text-align: center; color: #8a8f99; font-size: 26rpx; }
+.chart { width: 100%; height: 420rpx; margin-top: 10rpx; }
+.row { display: flex; align-items: center; padding: 16rpx 0; border-bottom: 2rpx solid #f0f1f2; font-size: 24rpx; }
+.head-row { color: #8a8f99; font-size: 22rpx; }
+.col { width: 20%; text-align: right; }
+.col.time { width: 40%; text-align: left; font-size: 21rpx; color: #5f5e5a; }
