@@ -184,13 +184,27 @@ static void provisioningInit() {
   svc->start();
 
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-  adv->addServiceUUID(PROV_SERVICE_UUID);
-  adv->setName(advName.c_str());
+  // 用 16 位 UUID 广播：128 位 UUID 会占满 31 字节广播包，把设备名挤进 scan response，
+  // 导致微信小程序拿到"未知设备"甚至空名字。16 位只占 2 字节，名字可留在广播包里。
+  adv->addServiceUUID(NimBLEUUID((uint16_t)0xFFF0));
+  adv->setName(advName.c_str());  // NimBLE 默认会把名字同时放进广播包和 scan response
   adv->start();
   Serial.println("Provisioning BLE adv: " + advName);
 }
 
 static void provisioningLoop() {
+  // 广播保活：BLE 中央采集（连接/扫描保护板）会挤占外设配网广播，
+  // 一旦广播被停掉，手机就扫不到设备。每 2 秒检查一次，掉了就重新拉起。
+  static unsigned long lastAdvCheck = 0;
+  if (millis() - lastAdvCheck >= 2000) {
+    lastAdvCheck = millis();
+    NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+    if (adv && !adv->isAdvertising()) {
+      adv->start();
+      Serial.println("BLE advertising re-started (keepalive)");
+    }
+  }
+
   if (_scanRequested) {
     _scanRequested = false;
     doScanAndReply();
