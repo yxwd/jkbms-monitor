@@ -68,11 +68,30 @@ Page({
     step: 1
   },
 
-  onUnload() { this.disconnect() },
+  onUnload() {
+    if (this._onFound) { try { wx.offBluetoothDeviceFound(this._onFound) } catch (e) {} this._onFound = null }
+    this.disconnect()
+  },
 
   addLog(s) {
+    console.log('[provision] ' + s)
     const log = this.data.log.concat([s])
     this.setData({ log: log.slice(-40) })
+  },
+
+  // 复制全部日志到剪贴板，方便用户粘贴反馈
+  copyLogs() {
+    const lines = this.data.log || []
+    if (!lines.length) {
+      wx.showToast({ title: '暂无日志', icon: 'none' })
+      return
+    }
+    const header = '=== 配网诊断日志 ' + new Date().toLocaleString() + ' ==='
+    wx.setClipboardData({
+      data: header + '\n' + lines.join('\n'),
+      success: () => wx.showToast({ title: '日志已复制，可粘贴发送', icon: 'success' }),
+      fail: () => wx.showToast({ title: '复制失败', icon: 'none' })
+    })
   },
 
   // 1. 扫描 ESP32 配网广播
@@ -95,25 +114,63 @@ Page({
   },
 
   discover() {
+    // 关键修复：用 onBluetoothDeviceFound 实时收集。Android 上广播名常在后续回调
+    // 才从 scan response 解析出来，一次性 getBluetoothDevices 只能拿到"未知设备"。
+    this._found = {}
+    if (this._onFound) { try { wx.offBluetoothDeviceFound(this._onFound) } catch (e) {} }
+    this._onFound = (res) => {
+      ;(res.devices || []).forEach(d => {
+        const prev = this._found[d.deviceId]
+        const nm = d.localName || d.name || ''
+        const rssi = typeof d.RSSI === 'number' ? d.RSSI : -999
+        // 保留信息更全、信号更强的那条记录
+        if (!prev || (nm && nm !== '未知设备' && (!prev.name || prev.name === '未知设备')) || rssi > prev.rssi) {
+          this._found[d.deviceId] = { name: nm, deviceId: d.deviceId, rssi: rssi,
+            localName: d.localName || '', rawName: d.name || '' }
+        }
+      })
+    }
+    wx.onBluetoothDeviceFound(this._onFound)
+
     wx.startBluetoothDevicesDiscovery({
-      allowDuplicatesKey: false,
+      allowDuplicatesKey: true,  // 允许重复上报，才能拿到后续解析出的真名
       success: () => {
-        this.addLog('开始扫描设备…')
-        this.setData({ status: '正在扫描 JKBMS 设备…' })
+        this.addLog('开始扫描（实时收集模式）…')
+        this.setData({ status: '正在扫描蓝牙设备…（6 秒）' })
         setTimeout(() => {
-          wx.getBluetoothDevices({
-            success: (r) => {
-              const found = r.devices.filter(d => (d.name || '').indexOf('JKBMS-') === 0)
-              this.setData({
-                devices: found.map(d => ({ name: d.name, deviceId: d.deviceId, rssi: d.RSSI })),
-                scanning: false,
-                status: found.length ? ('发现 ' + found.length + ' 台设备') : '未发现设备，请确认设备已上电'
-              })
-              this.addLog('扫描完成，发现 ' + found.length + ' 台 JKBMS 设备')
-            },
-            fail: (e) => this.addLog('获取设备列表失败: ' + e.errMsg)
+          wx.stopBluetoothDevicesDiscovery()
+          const list = Object.keys(this._found).map(k => this._found[k])
+          // 诊断日志：名字 + 两个字段，便于定位
+          list.slice(0, 30).forEach(d => {
+            this.addLog('BLE: ' + (d.name || '(无名)') + ' [name=' + d.rawName +
+              ', localName=' + d.localName + '] ' + d.rssi + 'dBm')
           })
-        }, 4000)
+          const isJk = (d) => {
+            const nm = String(d.localName || d.name || '').toUpperCase()
+            return nm.indexOf('JKBMS') >= 0 || nm.indexOf('JK-BMS') >= 0 || nm.indexOf('JK02') >= 0
+          }
+          // 信号强度作为辅助判断：ESP32 就贴在手机旁，通常 -50dBm 以内，远强于环境设备
+          const near = (d) => d.rssi >= -60
+          const isTarget = (d) => isJk(d) || near(d)
+          list.sort((a, b) => b.rssi - a.rssi)  // 信号强的排前面
+          const shown = list.map(d => ({
+            name: (d.name || '(未命名设备)') + (near(d) && !isJk(d) ? ' ←近' : ''),
+            deviceId: d.deviceId,
+            rssi: d.rssi,
+            isJk: isJk(d),
+            isNear: near(d),
+            isTarget: isTarget(d)
+          }))
+          const targets = shown.filter(d => d.isTarget)
+          this.setData({
+            devices: shown,
+            scanning: false,
+            status: targets.length
+              ? ('发现 ' + targets.length + ' 台可疑设备（★或←近），点最上面的试连')
+              : ('共扫到 ' + shown.length + ' 个蓝牙设备，未见强信号设备，请确认 ESP32 已上电')
+          })
+          this.addLog('扫描完成：共 ' + list.length + ' 个设备，可疑 ' + targets.length + ' 台')
+        }, 6000)
       },
       fail: (e) => {
         this.setData({ scanning: false, status: '扫描启动失败: ' + e.errMsg })
