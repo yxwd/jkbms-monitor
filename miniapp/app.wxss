@@ -1,0 +1,72 @@
+page {
+  min-height: 100%;
+  background: #f5f7fa;
+  color: #1f2329;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 28rpx;
+  margin: 24rpx;
+  box-shadow: 0 4rpx 20rpx rgba(31, 35, 41, 0.05);
+}
+
+.card-title {
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #5f5e5a;
+  margin-bottom: 20rpx;
+}
+
+.metric-grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.metric {
+  width: 50%;
+  padding: 12rpx 0;
+}
+
+.metric-label {
+  font-size: 24rpx;
+  color: #8a8f99;
+}
+
+.metric-value {
+  font-size: 40rpx;
+  font-weight: 500;
+  color: #1f2329;
+  line-height: 1.3;
+}
+
+.metric-unit {
+  font-size: 22rpx;
+  color: #8a8f99;
+  margin-left: 6rpx;
+}
+
+.row-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.muted {
+  color: #8a8f99;
+  font-size: 24rpx;
+}
+
+.danger {
+  color: #d92b2b;
+}
+
+.ok {
+  color: #0f9d58;
+}
+
+button {
+  border-radius: 12rpx;
+}
