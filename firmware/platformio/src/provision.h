@@ -18,9 +18,28 @@ static NimBLECharacteristic *pProvNotify = nullptr;
 static volatile bool _provClientConnected = false;
 inline bool provisioningClientConnected() { return _provClientConnected; }
 
+// 当前配网连接的句柄。notify 时精确发给这一个客户端，避免广播式 notify 在多连接时发错/丢失。
+static volatile uint16_t _provConnHandle = BLE_HS_CONN_HANDLE_NONE;
+
+// 最新一条回复的完整文本。FFF2 同时提供 READ 属性，小程序在 notify 收不到时可主动读取兜底。
+static String _lastReply = "NONE";
+
 class ProvServerCb : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *, NimBLEConnInfo &) override { _provClientConnected = true; }
-  void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override { _provClientConnected = false; }
+  void onConnect(NimBLEServer *, NimBLEConnInfo &info) override {
+    _provClientConnected = true;
+    _provConnHandle = info.getConnHandle();
+  }
+  void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
+    _provClientConnected = false;
+    _provConnHandle = BLE_HS_CONN_HANDLE_NONE;
+  }
+};
+
+// FFF2 读回调：返回最新回复文本，作为 notify 丢失时的兜底通道
+class ProvReadCb : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic *c, NimBLEConnInfo &) override {
+    c->setValue(_lastReply.c_str());
+  }
 };
 
 // 分片重组缓冲
@@ -47,6 +66,8 @@ static void queueReply(const String &msg) {
 // 分片发送：每帧 1 字节头 + ≤19 字节数据
 static void provSend(const String &msg) {
   if (!pProvNotify) return;
+  // 保存完整回复，供小程序 READ 兜底（notify 万一丢失也能读到）
+  _lastReply = msg;
   const int len = msg.length();
   const int perFrame = 19;
   int total = (len + perFrame - 1) / perFrame;
@@ -61,8 +82,13 @@ static void provSend(const String &msg) {
     uint8_t buf[20];
     buf[0] = hdr;
     memcpy(buf + 1, chunk.c_str(), chunk.length());
-    pProvNotify->notify(buf, chunk.length() + 1);
-    delay(2);
+    // 精确发给当前配网客户端；无有效句柄时退回广播式 notify
+    if (_provConnHandle != BLE_HS_CONN_HANDLE_NONE) {
+      pProvNotify->notify(buf, chunk.length() + 1, _provConnHandle);
+    } else {
+      pProvNotify->notify(buf, chunk.length() + 1);
+    }
+    delay(3);
   }
 }
 
@@ -201,8 +227,10 @@ static void provisioningInit() {
   NimBLEDevice::getServer()->setCallbacks(new ProvServerCb());
   NimBLEService *svc = NimBLEDevice::getServer()->createService(PROV_SERVICE_UUID);
   pProvWrite = svc->createCharacteristic(PROV_WRITE_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-  pProvNotify = svc->createCharacteristic(PROV_NOTIFY_UUID, NIMBLE_PROPERTY::NOTIFY);
+  // FFF2 同时支持 NOTIFY + READ：notify 丢失时小程序可主动 read 读取 _lastReply 兜底
+  pProvNotify = svc->createCharacteristic(PROV_NOTIFY_UUID, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ);
   pProvWrite->setCallbacks(new ProvWriteCb());
+  pProvNotify->setCallbacks(new ProvReadCb());
   svc->start();
 
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
