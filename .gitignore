@@ -1,0 +1,15 @@
+# 编译产物 / 缓存
+.pio/
+.build/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+
+# 微信开发者工具私有配置
+project.private.config.json
+.wbapp*privacy.json
+
+# 本地调试输出
+preview-info*.json
+*.log
