@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@tencent-ai/workbuddy-cloud-sdk": "^0.1.4-dev.71e5d1e.202611161655"
+  }
+}
