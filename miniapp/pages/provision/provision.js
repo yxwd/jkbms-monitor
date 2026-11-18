@@ -2,6 +2,7 @@
 const SERVICE_UUID = '0000FFF0-0000-1000-8000-00805F9B34FB'
 const WRITE_UUID = '0000FFF1-0000-1000-8000-00805F9B34FB'
 const NOTIFY_UUID = '0000FFF2-0000-1000-8000-00805F9B34FB'
+const APP_VERSION = getApp().globalData.appVersion
 
 // 分片重组（与固件协议一致：1字节头 + ≤19字节数据）
 function decodeFrames(chunks) {
@@ -54,6 +55,8 @@ function esc(s) { return String(s).replace(/\\/g, '\\\\').replace(/,/g, '\\,') }
 
 Page({
   data: {
+    appVersion: APP_VERSION,
+    pongOk: false,
     scanning: false,
     bleReady: false,
     connectedName: '',
@@ -86,7 +89,7 @@ Page({
       wx.showToast({ title: '暂无日志', icon: 'none' })
       return
     }
-    const header = '=== 配网诊断日志 ' + new Date().toLocaleString() + ' ==='
+    const header = '=== 配网诊断日志（小程序 v' + APP_VERSION + '）' + new Date().toLocaleString() + ' ==='
     wx.setClipboardData({
       data: header + '\n' + lines.join('\n'),
       success: () => wx.showToast({ title: '日志已复制，可粘贴发送', icon: 'success' }),
@@ -218,13 +221,31 @@ Page({
               deviceId: this._deviceId, serviceId: this._serviceId,
               characteristicId: this._notifyId, state: true,
               success: () => {
-                wx.onBLECharacteristicValueChange((res) => {
+                // 先注销再注册，避免重复连接时多个回调叠加
+                if (this._onBleChange) { try { wx.offBLECharacteristicValueChange(this._onBleChange) } catch (e) {} }
+                this._onBleChange = (res) => {
                   const msgs = decodeFrames([res.value])
-                  msgs.forEach(m => this.onMessage(m))
-                })
-                this.setData({ step: 2, status: '配网通道就绪' })
-                this.addLog('通知订阅成功')
+                  if (msgs.length) {
+                    msgs.forEach(m => this.onMessage(m))
+                  } else {
+                    // read 兜底返回的是固件保存的完整文本（不带分片头），当原始文本解析
+                    this.handleRawRead(res)
+                  }
+                }
+                wx.onBLECharacteristicValueChange(this._onBleChange)
+                this.setData({ step: 2, status: '配网通道就绪', pongOk: false })
+                this.addLog('通知订阅成功 · 小程序 v' + APP_VERSION)
+                // 连上后主动探测设备，并回显已保存的配置（WiFi/设备ID/保护板）
                 this.cmd('PING')
+                setTimeout(() => this.cmd('GET_CFG'), 300)
+                // 【兜底】notify 可能因 CCCD/时机问题丢失：1.5 秒后若还没收到 PONG，
+                // 主动 read FFF2（固件把最新回复存为特征值），确保能拿到设备响应。
+                this._pongTimer = setTimeout(() => {
+                  if (!this.data.pongOk) {
+                    this.addLog('未收到 notify 的 PONG，改主动读取 FFF2…')
+                    this.readReply()
+                  }
+                }, 1500)
               },
               fail: (e) => this.addLog('订阅通知失败: ' + e.errMsg)
             })
@@ -240,7 +261,8 @@ Page({
     this.addLog('← ' + msg)
     if (msg.indexOf('PONG') === 0) {
       const p = msg.split(',')
-      this.setData({ status: '设备在线 · 固件 ' + (p[1] || '?') + ' · IP ' + (p[2] || '未连WiFi') })
+      this.setData({ pongOk: true, status: '设备在线 · 固件 ' + (p[1] || '?') + ' · IP ' + (p[2] || '未连WiFi') })
+      if (this._pongTimer) { clearTimeout(this._pongTimer); this._pongTimer = null }
     } else if (msg.indexOf('BMS_LIST') === 0) {
       const list = msg.split(',').slice(1).map(s => {
         const [mac, rssi, name] = s.split('|')
@@ -249,7 +271,12 @@ Page({
       this.setData({ bmsList: list, status: list.length ? ('发现 ' + list.length + ' 块保护板') : '未发现保护板' })
     } else if (msg.indexOf('CFG,') === 0) {
       const p = msg.split(',')
-      this.setData({ wifiSsid: p[1] || '', selectedMac: p[2] || '', deviceId: p[3] || '' })
+      const state = p[4] || 'IDLE'
+      this.setData({
+        wifiSsid: p[1] || '', selectedMac: p[2] || '', deviceId: p[3] || '',
+        status: (p[1] ? ('已读取配置 · WiFi: ' + p[1] + ' · ' + state) : '设备未配置 WiFi，请填写下方信息')
+      })
+      this.addLog('已回显配置：SSID=' + (p[1] || '(空)') + ' 保护板=' + (p[2] || '(未绑定)') + ' 设备ID=' + (p[3] || '(空)') + ' 状态=' + state)
     } else if (msg === 'OK') {
       wx.showToast({ title: '已保存', icon: 'success' })
     } else if (msg.indexOf('ERR') === 0) {
@@ -272,6 +299,36 @@ Page({
       })
     }
     sendNext()
+  },
+
+  // 兜底：主动读取 FFF2 特征值。固件把最新一条回复的完整文本存在这里，
+  // 不受 notify/CCCD 丢包影响。读到的文本直接当一条消息处理。
+  readReply() {
+    if (!this._deviceId) return
+    wx.readBLECharacteristicValue({
+      deviceId: this._deviceId, serviceId: this._serviceId,
+      characteristicId: this._notifyId,
+      success: () => {
+        // 微信 read 的结果通过 onBLECharacteristicValueChange 回调返回（值不带分片头），
+        // 但为了兼容实现差异，这里也主动取一次特征值。
+        this.addLog('readBLECharacteristicValue 已发起')
+      },
+      fail: (e) => this.addLog('主动读取失败: ' + e.errMsg)
+    })
+  },
+
+  // 处理 read 回调返回的非分片原始文本（部分机型 read 结果走此回调）
+  handleRawRead(res) {
+    try {
+      const bytes = new Uint8Array(res.value)
+      let text = ''
+      for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i])
+      text = decodeURIComponent(escape(text))
+      this.addLog('←(read) ' + text)
+      this.onMessage(text)
+    } catch (e) {
+      this.addLog('解析 read 数据失败: ' + e.errMsg)
+    }
   },
 
   onSsidInput(e) { this.setData({ wifiSsid: e.detail.value }) },
@@ -324,6 +381,8 @@ Page({
   },
 
   disconnect() {
+    if (this._pongTimer) { clearTimeout(this._pongTimer); this._pongTimer = null }
+    if (this._onBleChange) { try { wx.offBLECharacteristicValueChange(this._onBleChange) } catch (e) {} this._onBleChange = null }
     if (this._deviceId) {
       wx.closeBLEConnection({ deviceId: this._deviceId })
       this._deviceId = null
