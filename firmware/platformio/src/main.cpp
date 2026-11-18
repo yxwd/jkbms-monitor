@@ -299,26 +299,23 @@ void setup() {
                  " BMS=" + (gCfg.hasBms() ? gCfg.bmsMac : "NONE") +
                  " ID=" + gCfg.deviceId);
 
-  // 若已配置 WiFi 则连接（配网写入后立即生效，这里处理开机重连）
-  if (gCfg.hasWifi()) {
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(gCfg.ssid.c_str(), gCfg.pass.c_str());
-    Serial.print("Connecting WiFi");
-    for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++) {
-      delay(500);
-      Serial.print(".");
-    }
-    Serial.println(WiFi.status() == WL_CONNECTED ? (" OK " + WiFi.localIP().toString()) : " FAILED");
-  } else {
-    WiFi.mode(WIFI_STA);
-    Serial.println("WiFi not configured -> wait for BLE provisioning");
-  }
-
-  // BLE 初始化（同时支持 central 采集 + peripheral 配网）
+  // 【关键修复】BLE 配网广播必须在 WiFi 之前启动。
+  // 旧版先阻塞等 WiFi（最多 15 秒）再初始化 BLE，导致"保存 WiFi 重启后
+  // 立刻扫码"落在空窗期扫不到设备。现在设备一上电就广播，立即可配网。
   NimBLEDevice::init("JKBMS-ESP32C3");
   NimBLEDevice::setPower(ESP_PWR_LVL_P6);
   provisioningInit();
-  Serial.println("BLE init done");
+  Serial.println("BLE init done, provisioning advertising started");
+
+  // WiFi 后台非阻塞连接：begin() 立即返回，连不连得上由 loop 里的 ensureWifi() 负责重试，
+  // 绝不在这里阻塞等待，避免拖慢 BLE 就绪。
+  WiFi.mode(WIFI_STA);
+  if (gCfg.hasWifi()) {
+    WiFi.begin(gCfg.ssid.c_str(), gCfg.pass.c_str());
+    Serial.println("WiFi connecting in background: " + gCfg.ssid);
+  } else {
+    Serial.println("WiFi not configured -> wait for BLE provisioning");
+  }
 }
 
 void loop() {
