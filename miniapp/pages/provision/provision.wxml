@@ -1,7 +1,12 @@
 <view class="page">
   <view class="intro">
-    <text class="intro-title">设备配网</text>
+    <view class="row-between">
+      <text class="intro-title">设备配网</text>
+      <text class="ver-badge">小程序 v{{appVersion}}</text>
+    </view>
     <text class="intro-sub">扫描并连接 ESP32 · 绑定保护板 · 配置 WiFi</text>
+    <text wx:if="{{pongOk}}" class="pong-ok">✓ 已收到设备 PONG · 通信正常</text>
+    <text wx:elif="{{bleReady}}" class="pong-wait">… 等待设备 PONG（超时将主动读取）</text>
   </view>
 
   <view class="card">
@@ -10,12 +15,14 @@
       <text wx:if="{{bleReady}}" class="tag ok">已连接</text>
     </view>
     <button wx:if="{{!bleReady}}" class="primary" bindtap="startScan" loading="{{scanning}}">扫描 JKBMS 设备</button>
+    <view wx:if="{{status && !bleReady}}" class="hint">{{status}}</view>
     <view wx:if="{{devices.length && !bleReady}}" class="dev-list">
-      <view wx:for="{{devices}}" wx:key="deviceId" class="dev-item" bindtap="connectDevice" data-deviceid="{{item.deviceId}}" data-name="{{item.name}}">
-        <text class="dev-name">{{item.name}}</text>
+      <view wx:for="{{devices}}" wx:key="deviceId" class="dev-item {{item.isTarget ? 'dev-target' : ''}}" bindtap="connectDevice" data-deviceid="{{item.deviceId}}" data-name="{{item.name}}">
+        <text class="dev-name">{{item.isJk ? '★ ' : (item.isNear ? '◇ ' : '')}}{{item.name}}</text>
         <text class="dev-rssi">{{item.rssi}} dBm</text>
       </view>
     </view>
+    <view wx:if="{{!bleReady && !scanning && !devices.length}}" class="hint">扫不到时请确认：① 手机蓝牙已开 ② 已授予微信定位权限（Android 必需）③ ESP32 已上电且刚烧录成功</view>
     <view wx:if="{{bleReady}}" class="connected">{{connectedName}}</view>
   </view>
 
@@ -57,9 +64,12 @@
   </block>
 
   <view class="card log-card">
-    <text class="card-title">日志</text>
+    <view class="row-between">
+      <text class="card-title">日志（可复制反馈）</text>
+      <button class="mini" bindtap="copyLogs">复制日志</button>
+    </view>
     <view class="log">
-      <view wx:for="{{log}}" wx:key="index" class="log-line">{{item}}</view>
+      <view wx:for="{{log}}" wx:key="index" class="log-line" user-select>{{item}}</view>
     </view>
   </view>
 </view>
