@@ -3,7 +3,7 @@
     <text class="device">{{deviceId}}</text>
     <text class="updated">{{updatedAt}}</text>
   </view>
-  <view wx:if="{{reading && reading.fw_version}}" style="font-size:24rpx;color:#888;padding:0 24rpx 12rpx;">固件 v{{reading.fw_version}}</view>
+  <view class="ver-line">固件 v{{reading.fw_version || '--'}} · 小程序 v{{appVersion}}</view>
 
   <view wx:if="{{loading}}" class="card state">正在读取云端数据…</view>
   <view wx:elif="{{error}}" class="card state danger">{{error}}</view>
