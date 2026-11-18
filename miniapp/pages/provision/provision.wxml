@@ -1,0 +1,65 @@
+<view class="page">
+  <view class="intro">
+    <text class="intro-title">设备配网</text>
+    <text class="intro-sub">扫描并连接 ESP32 · 绑定保护板 · 配置 WiFi</text>
+  </view>
+
+  <view class="card">
+    <view class="row-between">
+      <text class="card-title">步骤 1 · 连接设备</text>
+      <text wx:if="{{bleReady}}" class="tag ok">已连接</text>
+    </view>
+    <button wx:if="{{!bleReady}}" class="primary" bindtap="startScan" loading="{{scanning}}">扫描 JKBMS 设备</button>
+    <view wx:if="{{devices.length && !bleReady}}" class="dev-list">
+      <view wx:for="{{devices}}" wx:key="deviceId" class="dev-item" bindtap="connectDevice" data-deviceid="{{item.deviceId}}" data-name="{{item.name}}">
+        <text class="dev-name">{{item.name}}</text>
+        <text class="dev-rssi">{{item.rssi}} dBm</text>
+      </view>
+    </view>
+    <view wx:if="{{bleReady}}" class="connected">{{connectedName}}</view>
+  </view>
+
+  <block wx:if="{{bleReady}}">
+    <view class="card">
+      <view class="row-between">
+        <text class="card-title">步骤 2 · 绑定保护板</text>
+        <button class="mini" bindtap="scanBms">扫描附近保护板</button>
+      </view>
+      <view wx:if="{{bmsList.length}}" class="bms-list">
+        <view wx:for="{{bmsList}}" wx:key="mac" class="bms-item {{selectedMac===item.mac?'selected':''}}" bindtap="selectBms" data-mac="{{item.mac}}">
+          <view class="bms-info">
+            <text class="bms-name">{{item.name}}</text>
+            <text class="bms-mac">{{item.mac}}</text>
+          </view>
+          <text class="bms-rssi">{{item.rssi}} dBm</text>
+        </view>
+      </view>
+      <view wx:else class="hint">点击"扫描附近保护板"，选择要绑定的那块（按 MAC 精确锁定，不会连错）</view>
+      <view wx:if="{{selectedMac}}" class="selected-line">已选：{{selectedMac}}</view>
+    </view>
+
+    <view class="card">
+      <text class="card-title">步骤 3 · WiFi 配置</text>
+      <input class="field" placeholder="WiFi 名称 (SSID)" value="{{wifiSsid}}" bindinput="onSsidInput"/>
+      <input class="field" placeholder="WiFi 密码" password value="{{wifiPass}}" bindinput="onPassInput"/>
+      <button class="secondary" bindtap="saveWifi">保存 WiFi</button>
+    </view>
+
+    <view class="card">
+      <text class="card-title">步骤 4 · 设备 ID（可选）</text>
+      <input class="field" placeholder="上报设备ID" value="{{deviceId}}" bindinput="onIdInput"/>
+      <button class="secondary" bindtap="saveId">保存设备ID</button>
+      <button class="mini ghost" bindtap="loadCfg">读取当前配置</button>
+    </view>
+
+    <button class="primary apply" bindtap="applyAndReboot">保存并重启设备</button>
+    <button class="danger-btn" bindtap="factoryReset">恢复出厂设置</button>
+  </block>
+
+  <view class="card log-card">
+    <text class="card-title">日志</text>
+    <view class="log">
+      <view wx:for="{{log}}" wx:key="index" class="log-line">{{item}}</view>
+    </view>
+  </view>
+</view>
