@@ -2,6 +2,7 @@
 .head { display: flex; justify-content: space-between; padding: 8rpx 32rpx 20rpx; }
 .device { font-size: 24rpx; color: #5f5e5a; }
 .updated { font-size: 22rpx; color: #8a8f99; }
+.ver-line { font-size: 22rpx; color: #8a8f99; padding: 0 32rpx 16rpx; }
 .state { text-align: center; color: #8a8f99; font-size: 26rpx; }
 .tag { font-size: 22rpx; color: #185fa5; background: #e6f1fb; padding: 6rpx 14rpx; border-radius: 20rpx; }
 .soc-row { display: flex; align-items: baseline; margin-bottom: 12rpx; }
