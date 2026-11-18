@@ -1,0 +1,82 @@
+<view class="page">
+  <view class="card">
+    <view class="title">已发布版本</view>
+    <view wx:if="{{loading}}" class="state">正在读取版本列表…</view>
+    <view wx:elif="{{error}}" class="state danger">{{error}}</view>
+    <view wx:elif="{{versions.length == 0}}" class="state">还没有发布过固件</view>
+    <view wx:for="{{versions}}" wx:key="id" class="ver">
+      <view class="ver-head">
+        <text class="ver-num">v{{item.version}}</text>
+        <text class="tag {{item.enabled ? 'on' : 'off'}}">{{item.enabled ? '已启用' : '已停用'}}</text>
+      </view>
+      <view class="meta">版本码 {{item.version_code}} · 目标 {{item.targetText}} · {{item.timeText}}</view>
+      <view class="url" bindtap="copyUrl" data-url="{{item.url}}">{{item.url}}</view>
+      <view wx:if="{{item.notes}}" class="meta">{{item.notes}}</view>
+      <view class="actions">
+        <button class="mini" size="mini" bindtap="toggle" data-id="{{item.id}}" data-enabled="{{item.enabled}}">{{item.enabled ? '停用' : '启用'}}</button>
+        <button class="mini danger" size="mini" bindtap="remove" data-id="{{item.id}}">删除</button>
+      </view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="title">发布新版本</view>
+    <view class="tip">固件 bin 必须先放到稳定的公开 HTTPS 地址。云存储的签名链接会过期，不能用于 OTA。</view>
+
+    <view wx:if="{{needToken}}" class="field">
+      <text class="label">管理口令</text>
+      <input password placeholder="输入管理口令" value="{{adminToken}}" bindinput="onField" data-key="adminToken" />
+    </view>
+
+    <view class="field">
+      <text class="label">固件地址（https）</text>
+      <input placeholder="https://example.com/firmware.bin" value="{{form.url}}" bindinput="onField" data-key="url" />
+    </view>
+
+    <button class="choose" bindtap="chooseFile" loading="{{computing}}">选择本地 bin，自动算校验值和大小</button>
+    <view wx:if="{{fileName}}" class="file">文件：{{fileName}} · {{form.sizeBytes}} 字节</view>
+
+    <view class="field two">
+      <view class="half">
+        <text class="label">版本号</text>
+        <input placeholder="1.3.0" value="{{form.version}}" bindinput="onField" data-key="version" />
+      </view>
+      <view class="half">
+        <text class="label">版本码（整数）</text>
+        <input type="number" placeholder="10300" value="{{form.versionCode}}" bindinput="onField" data-key="versionCode" />
+      </view>
+    </view>
+
+    <view class="field">
+      <text class="label">SHA256（64 位）</text>
+      <textarea placeholder="选择文件自动生成，也可手动填写" value="{{form.sha256}}" bindinput="onField" data-key="sha256" auto-height />
+    </view>
+
+    <view class="field two">
+      <view class="half">
+        <text class="label">固件大小（字节）</text>
+        <input type="number" placeholder="选择文件自动填" value="{{form.sizeBytes}}" bindinput="onField" data-key="sizeBytes" />
+      </view>
+      <view class="half">
+        <text class="label">目标设备</text>
+        <input placeholder="* 或逗号分隔的设备ID" value="{{form.targetDevices}}" bindinput="onField" data-key="targetDevices" />
+      </view>
+    </view>
+
+    <view class="field">
+      <text class="label">备注</text>
+      <input placeholder="本次更新内容" value="{{form.notes}}" bindinput="onField" data-key="notes" />
+    </view>
+
+    <view class="switch-row">
+      <text>启用此版本</text>
+      <switch checked="{{form.enabled}}" bindchange="onSwitch" data-key="enabled" color="#2b7cff" />
+    </view>
+    <view class="switch-row">
+      <text>强制升级</text>
+      <switch checked="{{form.mandatory}}" bindchange="onSwitch" data-key="mandatory" color="#2b7cff" />
+    </view>
+
+    <button class="primary" bindtap="publish">发布到云端</button>
+  </view>
+</view>
