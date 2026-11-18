@@ -9,7 +9,8 @@ Page({
     updatedAt: '',
     socWidth: 0,
     alarmClass: 'ok',
-    deviceId: ''
+    deviceId: '',
+    appVersion: getApp().globalData.appVersion
   },
 
   onLoad() {
