@@ -20,8 +20,8 @@
 
 // ===== 固件版本 / OTA =====
 // 每次改固件都要同步递增，否则设备不会认为有新版本
-#define FW_VERSION        "1.2.2"
-#define FW_VERSION_CODE   10202
+#define FW_VERSION        "1.2.3"
+#define FW_VERSION_CODE   10203
 // 每 5 分钟检查一次云端版本（复用已连接的 WiFi，不额外唤醒）
 #define OTA_CHECK_INTERVAL_MS 300000
 
