@@ -283,6 +283,9 @@ static bool upload() {
 static void ensureWifi() {
   if (!gCfg.hasWifi()) return;             // 未配置，等配网
   if (WiFi.status() == WL_CONNECTED) return;
+  // 手机正在配网时暂停 WiFi 重连：WiFi 扫描会抢占 2.4G 射频，
+  // 导致 BLE notify 丢包（PONG/OK 发不出去）。断开后再恢复重连。
+  if (provisioningClientConnected()) return;
   if (millis() - lastWifi < 10000) return; // 10 秒重试一次
   lastWifi = millis();
   WiFi.reconnect();
