@@ -1,0 +1,76 @@
+<view class="page">
+  <view class="head">
+    <text class="device">{{deviceId}}</text>
+    <text class="updated">{{updatedAt}}</text>
+  </view>
+  <view wx:if="{{reading && reading.fw_version}}" style="font-size:24rpx;color:#888;padding:0 24rpx 12rpx;">固件 v{{reading.fw_version}}</view>
+
+  <view wx:if="{{loading}}" class="card state">正在读取云端数据…</view>
+  <view wx:elif="{{error}}" class="card state danger">{{error}}</view>
+
+  <block wx:elif="{{reading}}">
+    <view class="card">
+      <view class="row-between">
+        <text class="card-title">电池概览</text>
+        <text class="tag">{{reading.protocol}}</text>
+      </view>
+      <view class="soc-row">
+        <text class="soc-num">{{reading.soc}}<text class="unit">%</text></text>
+        <text class="muted">剩余电量 · 健康度 {{reading.soh}}%</text>
+      </view>
+      <view class="bar"><view class="bar-fill" style="width:{{socWidth}}%"></view></view>
+      <view class="metric-grid">
+        <view class="metric">
+          <view class="metric-label">总电压</view>
+          <view class="metric-value">{{reading.total_voltage}}<text class="metric-unit">V</text></view>
+        </view>
+        <view class="metric">
+          <view class="metric-label">电流</view>
+          <view class="metric-value">{{reading.current}}<text class="metric-unit">A</text></view>
+        </view>
+        <view class="metric">
+          <view class="metric-label">功率</view>
+          <view class="metric-value">{{reading.power}}<text class="metric-unit">W</text></view>
+        </view>
+        <view class="metric">
+          <view class="metric-label">剩余容量</view>
+          <view class="metric-value">{{reading.capacity_remain}}<text class="metric-unit">Ah</text></view>
+        </view>
+        <view class="metric">
+          <view class="metric-label">循环次数</view>
+          <view class="metric-value">{{reading.cycles}}</view>
+        </view>
+        <view class="metric">
+          <view class="metric-label">标称容量</view>
+          <view class="metric-value">{{reading.nominal_capacity}}<text class="metric-unit">Ah</text></view>
+        </view>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="card-title">温度与状态</view>
+      <view class="metric-grid">
+        <view class="metric"><view class="metric-label">温度1</view><view class="metric-value">{{reading.temp1}}<text class="metric-unit">℃</text></view></view>
+        <view class="metric"><view class="metric-label">温度2</view><view class="metric-value">{{reading.temp2}}<text class="metric-unit">℃</text></view></view>
+        <view class="metric"><view class="metric-label">MOS温度</view><view class="metric-value">{{reading.mos_temp}}<text class="metric-unit">℃</text></view></view>
+        <view class="metric"><view class="metric-label">均衡</view><view class="metric-value">{{reading.balancing}}</view></view>
+      </view>
+      <view class="alarm {{alarmClass}}">告警：{{reading.alarm_text}}</view>
+    </view>
+
+    <view class="card">
+      <view class="card-title">单体电压（V）</view>
+      <view class="cell-grid">
+        <view wx:for="{{cells}}" wx:key="no" class="cell{{item.cls}}">
+          <text class="cell-no">{{item.no}}</text>
+          <text class="cell-v">{{item.v}}</text>
+        </view>
+      </view>
+      <view class="legend"><text class="dot min"></text>最低 <text class="dot max"></text>最高</view>
+    </view>
+  </block>
+
+  <button class="primary" bindtap="goHistory">查看历史曲线</button>
+  <button class="secondary" bindtap="goProvision">设备配网 / 更换绑定</button>
+  <button class="secondary" bindtap="goFirmware">固件远程升级</button>
+</view>
