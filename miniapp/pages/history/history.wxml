@@ -1,0 +1,32 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="card state">正在读取历史数据…</view>
+  <view wx:elif="{{error}}" class="card state danger">{{error}}</view>
+
+  <block wx:else>
+    <view class="card">
+      <view class="row-between">
+        <text class="card-title">总电压趋势</text>
+        <text class="muted">最近 {{count}} 条 · {{minV}} ~ {{maxV}} V</text>
+      </view>
+      <canvas canvas-id="chart" class="chart"></canvas>
+    </view>
+
+    <view class="card">
+      <view class="card-title">最近上报</view>
+      <view class="row head-row">
+        <text class="col time">时间</text>
+        <text class="col">电压</text>
+        <text class="col">电流</text>
+        <text class="col">SOC</text>
+        <text class="col">功率</text>
+      </view>
+      <view wx:for="{{list}}" wx:key="time" class="row">
+        <text class="col time">{{item.time}}</text>
+        <text class="col">{{item.v}}</text>
+        <text class="col">{{item.a}}</text>
+        <text class="col">{{item.soc}}</text>
+        <text class="col">{{item.w}}</text>
+      </view>
+    </view>
+  </block>
+</view>
