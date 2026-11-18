@@ -14,14 +14,35 @@
 static NimBLECharacteristic *pProvWrite = nullptr;
 static NimBLECharacteristic *pProvNotify = nullptr;
 
+// 手机是否正在配网连接。连接期间暂停 WiFi 重连，避免 WiFi 扫描抢占射频导致 BLE 丢包。
+static volatile bool _provClientConnected = false;
+inline bool provisioningClientConnected() { return _provClientConnected; }
+
+class ProvServerCb : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *, NimBLEConnInfo &) override { _provClientConnected = true; }
+  void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override { _provClientConnected = false; }
+};
+
 // 分片重组缓冲
 static String   _rxMsg;
 static int      _rxNextSeq = 0;
 static bool     _rxActive = false;
 
-// 扫描请求标志（在 loop 中异步执行，避免阻塞 BLE 回调）
+// 扫描/重启请求标志（在 loop 中异步执行，避免阻塞 BLE 回调）
 static volatile bool _scanRequested = false;
 static volatile bool _rebootRequested = false;
+
+// 待发送回复队列：GATT 回调(onWrite)上下文中直接 notify 极易丢包
+// （尤其 WiFi 正在扫描/重连抢占射频时），统一入队后由 provisioningLoop 在主循环发送。
+static String _replyQueue[8];
+static int    _replyHead = 0;
+static int    _replyTail = 0;
+static void queueReply(const String &msg) {
+  int next = (_replyTail + 1) % 8;
+  if (next == _replyHead) return;   // 队列满，丢弃最旧策略下直接放弃
+  _replyQueue[_replyTail] = msg;
+  _replyTail = next;
+}
 
 // 分片发送：每帧 1 字节头 + ≤19 字节数据
 static void provSend(const String &msg) {
@@ -109,17 +130,17 @@ static void handleCommand(const String &msg) {
   const String cmd = a[0];
 
   if (cmd == "PING") {
-    provSend(String("PONG,") + FW_VERSION + "," + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("NONE")));
+    queueReply(String("PONG,") + FW_VERSION + "," + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("NONE")));
   } else if (cmd == "SCAN_BMS") {
     _scanRequested = true;
     // 扫描完成后在 loop 中回复 BMS_LIST
   } else if (cmd == "GET_CFG") {
-    provSend(String("CFG,") + gCfg.ssid + "," + gCfg.bmsMac + "," + gCfg.deviceId + "," + wifiStateText());
+    queueReply(String("CFG,") + gCfg.ssid + "," + gCfg.bmsMac + "," + gCfg.deviceId + "," + wifiStateText());
   } else if (cmd == "SET_WIFI" && a.size() >= 3) {
     gCfg.ssid = a[1];
     gCfg.pass = a[2];
     cfgSave();
-    provSend("OK");
+    queueReply("OK");
     // 立即尝试连接，无需重启即可看到 IP
     if (gCfg.hasWifi()) {
       WiFi.mode(WIFI_STA);
@@ -129,26 +150,26 @@ static void handleCommand(const String &msg) {
     gCfg.bmsMac = a[1];
     gCfg.bmsMac.toUpperCase();
     cfgSave();
-    provSend("OK");
+    queueReply("OK");
   } else if (cmd == "SET_ID" && a.size() >= 2) {
     gCfg.deviceId = a[1];
     cfgSave();
-    provSend("OK");
+    queueReply("OK");
   } else if (cmd == "SET_CLOUD" && a.size() >= 4) {
     gCfg.endpoint = a[1];
     gCfg.pkey = a[2];
     gCfg.table = a[3];
     cfgSave();
-    provSend("OK");
+    queueReply("OK");
   } else if (cmd == "REBOOT") {
-    provSend("OK");
+    queueReply("OK");
     _rebootRequested = true;
   } else if (cmd == "FACTORY_RESET") {
     cfgFactoryReset();
-    provSend("OK");
+    queueReply("OK");
     _rebootRequested = true;
   } else {
-    provSend("ERR:unknown command");
+    queueReply("ERR:unknown command");
   }
 }
 
@@ -177,6 +198,7 @@ class ProvWriteCb : public NimBLECharacteristicCallbacks {
 static void provisioningInit() {
   String advName = "JKBMS-" + cfgChipSuffix();
   NimBLEDevice::createServer();
+  NimBLEDevice::getServer()->setCallbacks(new ProvServerCb());
   NimBLEService *svc = NimBLEDevice::getServer()->createService(PROV_SERVICE_UUID);
   pProvWrite = svc->createCharacteristic(PROV_WRITE_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   pProvNotify = svc->createCharacteristic(PROV_NOTIFY_UUID, NIMBLE_PROPERTY::NOTIFY);
@@ -205,13 +227,21 @@ static void provisioningLoop() {
     }
   }
 
+  // 发送队列中的回复。必须在主循环里 notify：在 GATT onWrite 回调上下文中
+  // 直接 notify 会丢包（WiFi 扫描/重连抢占射频时尤其严重），导致小程序收不到 PONG/OK。
+  if (_replyHead != _replyTail) {
+    String reply = _replyQueue[_replyHead];
+    _replyHead = (_replyHead + 1) % 8;
+    provSend(reply);
+  }
+
   if (_scanRequested) {
     _scanRequested = false;
     doScanAndReply();
   }
   if (_rebootRequested) {
     _rebootRequested = false;
-    delay(200);
+    delay(300);  // 给队列里的 OK 留出发送时间
     ESP.restart();
   }
 }
