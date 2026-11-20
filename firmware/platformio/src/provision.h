@@ -199,8 +199,13 @@ static void handleCommand(const String &msg) {
     _scanRequested = true;
     // 扫描完成后在 loop 中回复 BMS_LIST
   } else if (cmd == "GET_CFG") {
+    // 末尾追加涂鸦状态：T<1/0>:<devId前8位或->:<region>，不回显 secret
+    String tyStat = gCfg.hasTuya()
+      ? (String("T1:") + gCfg.tuyaDevId.substring(0, 8) + ":" + String(gCfg.tuyaRegion))
+      : String("T0:-:0");
     queueReply(String("CFG,") + gCfg.ssid + "," + gCfg.bmsMac + "," + gCfg.deviceId + "," + wifiStateText() +
-               ",C" + String(statConnects) + "/D" + String(statDrops) + "/R" + String(statReads));
+               ",C" + String(statConnects) + "/D" + String(statDrops) + "/R" + String(statReads) +
+               "," + tyStat);
   } else if (cmd == "SET_WIFI" && a.size() >= 3) {
     gCfg.ssid = a[1];
     gCfg.pass = a[2];
@@ -224,6 +229,21 @@ static void handleCommand(const String &msg) {
     gCfg.endpoint = a[1];
     gCfg.pkey = a[2];
     gCfg.table = a[3];
+    cfgSave();
+    queueReply("OK");
+  } else if (cmd == "SET_TUYA" && a.size() >= 4) {
+    // SET_TUYA,<pid>,<deviceId>,<deviceSecret>[,<region 0-6>]
+    // 三元组一机一密，写入 NVS；secret 不回显、不进日志。
+    gCfg.tuyaPid    = a[1];
+    gCfg.tuyaDevId  = a[2];
+    gCfg.tuyaSecret = a[3];
+    gCfg.tuyaRegion = (a.size() >= 5) ? a[4].toInt() : TUYA_REGION_DEFAULT;
+    if (gCfg.tuyaRegion < 0 || gCfg.tuyaRegion > 6) gCfg.tuyaRegion = 0;
+    gCfg.tuyaEnabled = true;
+    cfgSave();
+    queueReply("OK");
+  } else if (cmd == "TUYA_OFF") {
+    gCfg.tuyaEnabled = false;
     cfgSave();
     queueReply("OK");
   } else if (cmd == "REBOOT") {

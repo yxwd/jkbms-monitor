@@ -7,8 +7,14 @@
 
 struct AppConfig {
   String ssid, pass, bmsMac, deviceId, endpoint, pkey, table;
+  // 涂鸦三元组与配置（PID / DeviceID / DeviceSecret 一机一密）
+  String tuyaPid, tuyaDevId, tuyaSecret;
+  int  tuyaRegion = TUYA_REGION_DEFAULT;
+  bool tuyaEnabled = false;
   bool hasWifi() const { return ssid.length() > 0; }
   bool hasBms()  const { return bmsMac.length() > 0 && bmsMac != "00:00:00:00:00:00"; }
+  bool hasTuya() const { return tuyaEnabled && tuyaPid.length() > 0 &&
+                                tuyaDevId.length() > 0 && tuyaSecret.length() > 0; }
 };
 
 static Preferences _prefs;
@@ -36,6 +42,11 @@ static void cfgLoad() {
   gCfg.endpoint = _prefs.getString("endpoint", CLOUD_ENDPOINT);
   gCfg.pkey     = _prefs.getString("pkey", CLOUD_PUBLISHABLE_KEY);
   gCfg.table    = _prefs.getString("table", CLOUD_TABLE);
+  gCfg.tuyaPid     = _prefs.getString("typid", "");
+  gCfg.tuyaDevId   = _prefs.getString("tydev", "");
+  gCfg.tuyaSecret  = _prefs.getString("tysec", "");
+  gCfg.tuyaRegion  = _prefs.getInt("tyregion", TUYA_REGION_DEFAULT);
+  gCfg.tuyaEnabled = _prefs.getBool("tyen", TUYA_ENABLED_DEFAULT != 0);
   _prefs.end();
   if (gCfg.deviceId.length() == 0) gCfg.deviceId = "JKBMS-" + cfgChipSuffix();
 }
@@ -49,6 +60,11 @@ static void cfgSave() {
   _prefs.putString("endpoint", gCfg.endpoint);
   _prefs.putString("pkey", gCfg.pkey);
   _prefs.putString("table", gCfg.table);
+  _prefs.putString("typid", gCfg.tuyaPid);
+  _prefs.putString("tydev", gCfg.tuyaDevId);
+  _prefs.putString("tysec", gCfg.tuyaSecret);
+  _prefs.putInt("tyregion", gCfg.tuyaRegion);
+  _prefs.putBool("tyen", gCfg.tuyaEnabled);
   _prefs.end();
 }
 

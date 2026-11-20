@@ -82,6 +82,25 @@
       <button class="mini ghost" bindtap="loadCfg">读取当前配置</button>
     </view>
 
+    <view class="card">
+      <view class="row-between">
+        <text class="card-title">步骤 5 · 涂鸦智能（可选）</text>
+        <text class="hint">{{tuyaStatus || '未配置'}}</text>
+      </view>
+      <view class="hint">开启后数据同时上报涂鸦云，可在「智能生活」App 里查看并做场景联动。需先在涂鸦平台创建产品、定义 DP 点、添加设备获得三元组（详见 TUYA-SETUP.md）。</view>
+      <input class="field" placeholder="Product ID (PID)" value="{{tuyaPid}}" bindinput="onTuyaPid"/>
+      <input class="field" placeholder="Device ID" value="{{tuyaDevId}}" bindinput="onTuyaDevId"/>
+      <input class="field" password placeholder="Device Secret（密钥，仅存设备本地）" value="{{tuyaSecret}}" bindinput="onTuyaSecret"/>
+      <view class="mac-row">
+        <text class="hint">区域：</text>
+        <picker mode="selector" range="{{['0 中国','1 美西','2 中欧','3 美东','4 西欧','5 印度','6 新加坡']}}" value="{{tuyaRegion}}" bindchange="onTuyaRegion">
+          <view class="picker-btn">{{tuyaRegion}} · 点此选择</view>
+        </picker>
+      </view>
+      <button class="secondary" bindtap="saveTuya">启用涂鸦上报</button>
+      <button class="mini ghost" bindtap="turnOffTuya">关闭涂鸦上报</button>
+    </view>
+
     <button class="primary apply" bindtap="applyAndReboot">保存并重启设备</button>
     <button class="danger-btn" bindtap="factoryReset">恢复出厂设置</button>
   </block>

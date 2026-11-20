@@ -80,6 +80,12 @@ Page({
     wifiPass: '',
     deviceId: '',
     manualMac: '',      // 手动输入的保护板 MAC
+    // 涂鸦三元组
+    tuyaPid: '',
+    tuyaDevId: '',
+    tuyaSecret: '',
+    tuyaRegion: '0',
+    tuyaStatus: '',
     status: '',
     linkStat: '',       // 采集链路统计（连接/断连/读取次数）
     log: [],
@@ -343,6 +349,15 @@ Page({
       })
       this.addLog('已回显配置：SSID=' + (p[1] || '(空)') + ' 保护板=' + (p[2] || '(未绑定)') + ' 设备ID=' + (p[3] || '(空)') + ' 状态=' + state)
       this.showLinkStat(p[5])
+      // 涂鸦状态（固件 v1.3.0+）：T1:dev前8位:region / T0:-:0
+      const ty = p[6] || ''
+      if (ty.indexOf('T1:') === 0) {
+        const tp = ty.split(':')
+        this.setData({ tuyaStatus: '已启用 · 设备 ' + (tp[1] || '?') + ' · 区域 ' + (tp[2] || '0') })
+        this.addLog('涂鸦上报：已启用（设备 ' + (tp[1] || '?') + '，区域 ' + (tp[2] || '0') + '）')
+      } else if (ty.indexOf('T0:') === 0) {
+        this.setData({ tuyaStatus: '未启用' })
+      }
     } else if (msg === 'OK') {
       wx.showToast({ title: '已保存', icon: 'success' })
     } else if (msg.indexOf('ERR') === 0) {
@@ -497,6 +512,26 @@ Page({
   saveId() {
     if (!this.data.deviceId) { wx.showToast({ title: '请输入设备ID', icon: 'none' }); return }
     this.cmd('SET_ID,' + esc(this.data.deviceId))
+  },
+
+  // ===== 涂鸦配置 =====
+  onTuyaPid(e) { this.setData({ tuyaPid: e.detail.value.trim() }) },
+  onTuyaDevId(e) { this.setData({ tuyaDevId: e.detail.value.trim() }) },
+  onTuyaSecret(e) { this.setData({ tuyaSecret: e.detail.value.trim() }) },
+  onTuyaRegion(e) { this.setData({ tuyaRegion: String(e.detail.value) }) },
+  saveTuya() {
+    const { tuyaPid, tuyaDevId, tuyaSecret, tuyaRegion } = this.data
+    if (!tuyaPid || !tuyaDevId || !tuyaSecret) {
+      wx.showToast({ title: '请填全 PID/设备ID/密钥', icon: 'none' }); return
+    }
+    // 三元组含敏感信息：只在下发命令的日志里打码，不打印明文
+    this.addLog('下发 SET_TUYA pid=' + tuyaPid + ' dev=' + tuyaDevId + ' secret=**** region=' + tuyaRegion)
+    this.cmd('SET_TUYA,' + esc(tuyaPid) + ',' + esc(tuyaDevId) + ',' + esc(tuyaSecret) + ',' + tuyaRegion)
+    this.setData({ tuyaStatus: '已下发（重启后生效）' })
+  },
+  turnOffTuya() {
+    this.cmd('TUYA_OFF')
+    this.setData({ tuyaStatus: '已关闭涂鸦上报' })
   },
 
   applyAndReboot() {

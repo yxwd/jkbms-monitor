@@ -11,24 +11,10 @@
 #include <vector>
 #include "config.h"
 #include "config_store.h"
+#include "bms_data.h"
 #include "provision.h"
 #include "ota.h"
-
-struct BmsData {
-  float totalVoltage = 0, current = 0, power = 0;
-  float soc = 0, soh = 0, capRemain = 0, nomCap = 0;
-  uint32_t cycles = 0, runtime = 0;
-  float temps[5] = {0, 0, 0, 0, 0};
-  float cells[32] = {0};
-  float resist[32] = {0};
-  uint8_t cellCount = 0;
-  uint16_t alarms = 0;
-  uint8_t balancing = 0;
-  bool chargeMos = false, dischargeMos = false;
-  String alarmText = "";
-  String protoName = "";
-  bool valid = false;
-};
+#include "tuya.h"
 
 static NimBLEClient *pClient = nullptr;
 static NimBLERemoteCharacteristic *pWriteChar = nullptr;
@@ -41,7 +27,7 @@ unsigned long statDrops = 0;      // 累计被动断开次数
 unsigned long statReads = 0;      // 累计读取命令次数
 static unsigned long lastConnectTry = 0; // 上次发起连接的时刻（冷却用）
 static unsigned long lastDropAt = 0;     // 上次断连时刻
-static BmsData latest;
+BmsData latest;   // 非 static：tuya.h 上报模块 extern 引用
 static BmsData reported;          // 上次成功上报的数据快照
 static bool hasReported = false;  // 是否已成功上报过
 static bool hasNewData = false;
@@ -418,5 +404,7 @@ void loop() {
       }
     }
   }
+  // 涂鸦上报（独立于 WorkBuddy 结果：WB 失败也照常尝试涂鸦）
+  tuyaLoop(hasNewData);
   delay(100);
 }
