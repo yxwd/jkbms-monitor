@@ -4,35 +4,48 @@ const WRITE_UUID = '0000FFF1-0000-1000-8000-00805F9B34FB'
 const NOTIFY_UUID = '0000FFF2-0000-1000-8000-00805F9B34FB'
 const APP_VERSION = getApp().globalData.appVersion
 
-// 分片重组（与固件协议一致：1字节头 + ≤19字节数据）
-function decodeFrames(chunks) {
-  let msg = ''
-  let nextSeq = 0
-  let active = false
-  const results = []
-  for (const buf of chunks) {
-    const bytes = new Uint8Array(buf)
-    if (bytes.length < 1) continue
-    const hdr = bytes[0]
-    const first = !!(hdr & 0x80)
-    const last = !!(hdr & 0x40)
-    const seq = hdr & 0x3F
-    if (first) { msg = ''; nextSeq = 0; active = true }
-    if (!active) continue
-    if (seq !== nextSeq) { msg = ''; active = false; continue }
-    let part = ''
-    for (let i = 1; i < bytes.length; i++) part += String.fromCharCode(bytes[i])
-    // 按 UTF-8 解码多字节字符
-    msg += decodeURIComponent(escape(part))
-    nextSeq++
-    if (last) { results.push(msg); msg = ''; active = false }
-  }
-  return results
+// 跨回调分片重组：notify 是一帧一帧回调的，状态必须跨调用保存。
+// 原 decodeFrames 每次调用都从零开始，导致多帧消息（BMS_LIST）永远拼不完整。
+let _rxMsg = '', _rxNextSeq = 0, _rxActive = false
+// 返回 { handled, msg }：
+//   handled=false → 不是分片帧，交给 read 原始文本兜底解析
+//   handled=true, msg=null → 是分片帧但还没拼完（或丢片），静默忽略，避免把中间帧当文本误报
+//   msg 非空 → 一条完整消息
+function decodeFrameChunk(buf) {
+  const bytes = new Uint8Array(buf)
+  if (bytes.length < 1) return { handled: false, msg: null }
+  const hdr = bytes[0]
+  const first = !!(hdr & 0x80), last = !!(hdr & 0x40), seq = hdr & 0x3F
+  if (first) { _rxMsg = ''; _rxNextSeq = 0; _rxActive = true }
+  if (!_rxActive) return { handled: false, msg: null }
+  if (seq !== _rxNextSeq) { _rxMsg = ''; _rxActive = false; return { handled: true, msg: null } }  // 丢片，重置
+  let part = ''
+  for (let i = 1; i < bytes.length; i++) part += String.fromCharCode(bytes[i])
+  _rxMsg += decodeURIComponent(escape(part))
+  _rxNextSeq++
+  if (last) { const out = _rxMsg; _rxMsg = ''; _rxActive = false; return { handled: true, msg: out } }
+  return { handled: true, msg: null }  // 分片中间帧，等后续帧
 }
 
-// 按协议分片编码命令
+// UTF-8 编码（不用 TextEncoder：部分机型/低版本基础库无 TextEncoder，会抛异常中断整个命令链）
+function utf8Bytes(str) {
+  const out = []
+  for (let i = 0; i < str.length; i++) {
+    let c = str.charCodeAt(i)
+    if (c < 0x80) out.push(c)
+    else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F))
+    else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < str.length) {
+      const c2 = str.charCodeAt(++i)
+      const cp = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00)
+      out.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F))
+    } else out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F))
+  }
+  return out
+}
+
+// 按协议分片编码命令：1字节头 + ≤19字节数据
 function encodeFrames(text) {
-  const bytes = new TextEncoder().encode(text)
+  const bytes = utf8Bytes(text)
   const frames = []
   const per = 19
   const total = Math.max(1, Math.ceil(bytes.length / per))
@@ -44,7 +57,7 @@ function encodeFrames(text) {
     if (i === total - 1) hdr |= 0x40
     hdr |= i & 0x3F
     frame[0] = hdr
-    frame.set(chunk, 1)
+    for (let j = 0; j < chunk.length; j++) frame[j + 1] = chunk[j]
     frames.push(frame.buffer)
   }
   return frames
@@ -66,7 +79,9 @@ Page({
     wifiSsid: '',
     wifiPass: '',
     deviceId: '',
+    manualMac: '',      // 手动输入的保护板 MAC
     status: '',
+    linkStat: '',       // 采集链路统计（连接/断连/读取次数）
     log: [],
     step: 1
   },
@@ -145,8 +160,7 @@ Page({
           const list = Object.keys(this._found).map(k => this._found[k])
           // 诊断日志：名字 + 两个字段，便于定位
           list.slice(0, 30).forEach(d => {
-            this.addLog('BLE: ' + (d.name || '(无名)') + ' [name=' + d.rawName +
-              ', localName=' + d.localName + '] ' + d.rssi + 'dBm')
+            this.addLog('BLE: ' + (d.name || '(无名)') + ' [' + d.deviceId + '] ' + d.rssi + 'dBm')
           })
           const isJk = (d) => {
             const nm = String(d.localName || d.name || '').toUpperCase()
@@ -224,28 +238,36 @@ Page({
                 // 先注销再注册，避免重复连接时多个回调叠加
                 if (this._onBleChange) { try { wx.offBLECharacteristicValueChange(this._onBleChange) } catch (e) {} }
                 this._onBleChange = (res) => {
-                  const msgs = decodeFrames([res.value])
-                  if (msgs.length) {
-                    msgs.forEach(m => this.onMessage(m))
-                  } else {
-                    // read 兜底返回的是固件保存的完整文本（不带分片头），当原始文本解析
-                    this.handleRawRead(res)
+                  try {
+                    const r = decodeFrameChunk(res.value)
+                    if (r.msg !== null) {
+                      this.onMessage(r.msg)
+                    } else if (!r.handled) {
+                      // 不是分片帧 → read 兜底返回固件保存的完整文本（不带分片头），当原始文本解析
+                      this.handleRawRead(res)
+                    }
+                    // r.handled && r.msg===null → 分片中间帧/丢片，静默忽略
+                  } catch (e) {
+                    this.addLog('解析 BLE 数据异常: ' + (e && e.message || e))
                   }
                 }
                 wx.onBLECharacteristicValueChange(this._onBleChange)
                 this.setData({ step: 2, status: '配网通道就绪', pongOk: false })
                 this.addLog('通知订阅成功 · 小程序 v' + APP_VERSION)
+
+                // 【关键】兜底定时器必须在发命令之前注册。旧版把 PING 写在最前，
+                // 一旦写入抛异常，后面的 GET_CFG 定时器和 PONG 兜底全部注册不上，
+                // 日志就会永远停在 "→ PING"（本次修复的核心）。
+                this._pingSent = false
+                this.armProbeTimers()
                 // 连上后主动探测设备，并回显已保存的配置（WiFi/设备ID/保护板）
-                this.cmd('PING')
-                setTimeout(() => this.cmd('GET_CFG'), 300)
-                // 【兜底】notify 可能因 CCCD/时机问题丢失：1.5 秒后若还没收到 PONG，
-                // 主动 read FFF2（固件把最新回复存为特征值），确保能拿到设备响应。
-                this._pongTimer = setTimeout(() => {
-                  if (!this.data.pongOk) {
-                    this.addLog('未收到 notify 的 PONG，改主动读取 FFF2…')
-                    this.readReply()
-                  }
-                }, 1500)
+                try {
+                  this._pingSent = true
+                  this.cmd('PING')
+                  setTimeout(() => this.cmd('GET_CFG'), 400)
+                } catch (e) {
+                  this.addLog('发起 PING/GET_CFG 异常: ' + (e && e.message || e))
+                }
               },
               fail: (e) => this.addLog('订阅通知失败: ' + e.errMsg)
             })
@@ -257,12 +279,55 @@ Page({
     })
   },
 
+  // ESP32 扫描保护板的逐台诊断日志：把固件回传的多行明细格式化后逐行显示
+  handleScanLog(msg) {
+    const body = msg.slice('SCANLOG|'.length)
+    if (body === 'start') {
+      this.addLog('ESP32 开始扫描附近 BLE 设备（约10秒，主循环阻塞中）…')
+      return
+    }
+    // 首行：total|hit，其后每行：序号|名字|MAC后8位|RSSI|svc|name|判定
+    const lines = body.split('\n')
+    const head = (lines[0] || '').split('|')
+    const total = head[0] || '0', hit = head[1] || '0'
+    this.addLog('=== ESP32 扫描诊断：共 ' + total + ' 台，命中 ' + hit + ' 台 ===')
+    let rows = 0
+    for (let i = 1; i < lines.length; i++) {
+      const p = (lines[i] || '').split('|')
+      if (p.length < 7) continue
+      const marked = p[6] === 'HIT' ? '★命中' : '略过'
+      const svc = p[4] === 'Y' ? 'FFE0✓' : 'FFE0✗'
+      const nm = p[5] === 'Y' ? '名✓' : '名✗'
+      this.addLog('  #' + p[0] + ' ' + p[1] + ' (' + p[2] + ') ' + p[3] + 'dBm ' + svc + ' ' + nm + ' → ' + marked)
+      rows++
+    }
+    if (total && Number(total) > rows) this.addLog('  …其余 ' + (Number(total) - rows) + ' 台未显示（诊断最多列24台）')
+    if (Number(hit) === 0) this.addLog('  提示：未命中说明周围没有广播 FFE0 服务或名字含 JK/BMS 的设备；保护板靠近后再扫')
+  },
+
+  // 解析采集链路统计 C连接/D断连/R读取（旧固件无此字段时静默忽略）
+  showLinkStat(stat) {
+    if (!stat || stat.indexOf('C') !== 0) return
+    const m = /^C(\d+)\/D(\d+)\/R(\d+)$/.exec(stat)
+    if (!m) return
+    const c = Number(m[1]), d = Number(m[2]), r = Number(m[3])
+    this.setData({ linkStat: '连接' + c + '次 · 断连' + d + '次 · 读取' + r + '次' })
+    if (c <= 1 && d === 0) {
+      this.addLog('采集链路：连接复用中（连接1次/0断连，未反复重连 ✓）')
+    } else {
+      this.addLog('采集链路：连接' + c + '次 / 断连' + d + '次 / 读取' + r + '次（若连接次数持续增长说明链路被反复断开）')
+    }
+  },
+
   onMessage(msg) {
+    // SCANLOG 是多行明细，交给专门格式化，不按原始消息整坨打印
+    if (msg.indexOf('SCANLOG|') === 0) { this.handleScanLog(msg); return }
     this.addLog('← ' + msg)
     if (msg.indexOf('PONG') === 0) {
       const p = msg.split(',')
       this.setData({ pongOk: true, status: '设备在线 · 固件 ' + (p[1] || '?') + ' · IP ' + (p[2] || '未连WiFi') })
-      if (this._pongTimer) { clearTimeout(this._pongTimer); this._pongTimer = null }
+      this.showLinkStat(p[3])
+      this.clearProbeTimers()
     } else if (msg.indexOf('BMS_LIST') === 0) {
       const list = msg.split(',').slice(1).map(s => {
         const [mac, rssi, name] = s.split('|')
@@ -277,6 +342,7 @@ Page({
         status: (p[1] ? ('已读取配置 · WiFi: ' + p[1] + ' · ' + state) : '设备未配置 WiFi，请填写下方信息')
       })
       this.addLog('已回显配置：SSID=' + (p[1] || '(空)') + ' 保护板=' + (p[2] || '(未绑定)') + ' 设备ID=' + (p[3] || '(空)') + ' 状态=' + state)
+      this.showLinkStat(p[5])
     } else if (msg === 'OK') {
       wx.showToast({ title: '已保存', icon: 'success' })
     } else if (msg.indexOf('ERR') === 0) {
@@ -285,20 +351,69 @@ Page({
   },
 
   cmd(text) {
-    if (!this._deviceId) return
+    if (!this._deviceId) { this.addLog('命令丢弃(未连接): ' + text); return }
     this.addLog('→ ' + text)
-    const frames = encodeFrames(text)
+    let frames
+    try {
+      frames = encodeFrames(text)
+    } catch (e) {
+      this.addLog('命令编码失败: ' + (e && e.message || e)); return
+    }
     let i = 0
     const sendNext = () => {
       if (i >= frames.length) return
-      wx.writeBLECharacteristicValue({
-        deviceId: this._deviceId, serviceId: this._serviceId,
-        characteristicId: this._writeId, value: frames[i++],
-        success: () => setTimeout(sendNext, 20),
-        fail: (e) => this.addLog('写入失败: ' + e.errMsg)
-      })
+      const idx = i
+      const buf = frames[i++]
+      const tag = '[' + (idx + 1) + '/' + frames.length + ']'
+      try {
+        wx.writeBLECharacteristicValue({
+          deviceId: this._deviceId, serviceId: this._serviceId,
+          characteristicId: this._writeId, value: buf,
+          success: () => {
+            this.addLog('  写入成功 ' + tag)
+            setTimeout(sendNext, 20)
+          },
+          fail: (e) => this.addLog('  写入失败 ' + tag + ': ' + e.errMsg)
+        })
+      } catch (e) {
+        this.addLog('  写入异常 ' + tag + ': ' + (e && e.message || e))
+      }
     }
     sendNext()
+  },
+
+  // 清除所有探测兜底定时器
+  clearProbeTimers() {
+    ;['_pongTimer', '_pongTimer2', '_pongTimer3', '_pingRetryTimer'].forEach(k => {
+      if (this[k]) { clearTimeout(this[k]); this[k] = null }
+    })
+  },
+
+  // 多级兜底：notify 可能因 CCCD/时机/射频抢占丢失，逐级用 read 和重发补偿。
+  // 每一级都独立判断 pongOk，避免重复提示。
+  armProbeTimers() {
+    this.clearProbeTimers()
+    // 1) 1.5s：首次未收到 PONG → 主动 read FFF2（固件把最新回复存为特征值）
+    this._pongTimer = setTimeout(() => {
+      if (!this.data.pongOk) {
+        this.addLog('未收到 notify 的 PONG，主动读取 FFF2…')
+        this.readReply()
+      }
+    }, 1500)
+    // 2) 3.5s：仍未收到 → 重发一次 PING（排除首包写入丢失）
+    this._pongTimer2 = setTimeout(() => {
+      if (!this.data.pongOk) {
+        this.addLog('仍无 PONG，重发 PING 并再次读取…')
+        try { this.cmd('PING') } catch (e) {}
+        setTimeout(() => { if (!this.data.pongOk) this.readReply() }, 400)
+      }
+    }, 3500)
+    // 3) 6s：仍未收到 → 记录诊断结论，提示抓固件串口日志
+    this._pongTimer3 = setTimeout(() => {
+      if (!this.data.pongOk) {
+        this.addLog('诊断：写入回调若均成功仍无 PONG，说明设备端未处理 PING，请查固件串口')
+      }
+    }, 6000)
   },
 
   // 兜底：主动读取 FFF2 特征值。固件把最新一条回复的完整文本存在这里，
@@ -327,7 +442,7 @@ Page({
       this.addLog('←(read) ' + text)
       this.onMessage(text)
     } catch (e) {
-      this.addLog('解析 read 数据失败: ' + e.errMsg)
+      this.addLog('解析 read 数据失败: ' + (e && (e.message || e.errMsg) || e))
     }
   },
 
@@ -336,7 +451,8 @@ Page({
   onIdInput(e) { this.setData({ deviceId: e.detail.value }) },
 
   scanBms() {
-    this.setData({ bmsList: [], status: '正在扫描附近保护板（约10秒）…' })
+    this.setData({ bmsList: [], status: '正在扫描附近保护板（约10秒，逐台结果见下方日志）…' })
+    this.addLog('下发 SCAN_BMS，等待 ESP32 逐台诊断…')
     this.cmd('SCAN_BMS')
   },
 
@@ -346,17 +462,36 @@ Page({
     this.addLog('已选择保护板 ' + mac)
   },
 
+  // 从步骤1手机扫到的设备里点选：Android 上 deviceId 就是设备的 BLE MAC
+  bindFromPhone(e) {
+    const mac = e.currentTarget.dataset.mac
+    if (!mac) return
+    this.setData({ selectedMac: mac })
+    this.addLog('从手机扫描结果选中 MAC ' + mac + '，点「绑定到设备」写入')
+  },
+
+  onManualMac(e) { this.setData({ manualMac: e.detail.value }) },
+
+  bindManualMac() {
+    const mac = (this.data.manualMac || '').trim().toUpperCase()
+    if (!mac) { wx.showToast({ title: '请输入保护板 MAC', icon: 'none' }); return }
+    this.setData({ selectedMac: mac })
+    this.addLog('手动填入 MAC ' + mac + '，点「绑定到设备」写入')
+  },
+
+  // 真正把 MAC 写进设备（固件 SET_BMS 按 MAC 精确直连，不依赖 ESP32 扫描）
+  saveBms() {
+    if (!this.data.selectedMac) { wx.showToast({ title: '请先选择保护板', icon: 'none' }); return }
+    this.addLog('下发 SET_BMS ' + this.data.selectedMac)
+    this.cmd('SET_BMS,' + esc(this.data.selectedMac))
+  },
+
   loadCfg() { this.cmd('GET_CFG') },
 
   saveWifi() {
     const { wifiSsid, wifiPass } = this.data
     if (!wifiSsid) { wx.showToast({ title: '请输入 WiFi 名称', icon: 'none' }); return }
     this.cmd('SET_WIFI,' + esc(wifiSsid) + ',' + esc(wifiPass))
-  },
-
-  saveBms() {
-    if (!this.data.selectedMac) { wx.showToast({ title: '请先选择保护板', icon: 'none' }); return }
-    this.cmd('SET_BMS,' + esc(this.data.selectedMac))
   },
 
   saveId() {
@@ -381,7 +516,7 @@ Page({
   },
 
   disconnect() {
-    if (this._pongTimer) { clearTimeout(this._pongTimer); this._pongTimer = null }
+    this.clearProbeTimers()
     if (this._onBleChange) { try { wx.offBLECharacteristicValueChange(this._onBleChange) } catch (e) {} this._onBleChange = null }
     if (this._deviceId) {
       wx.closeBLEConnection({ deviceId: this._deviceId })

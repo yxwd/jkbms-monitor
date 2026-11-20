@@ -15,7 +15,7 @@
 
 // ===== WorkBuddy 云服务 =====
 #define CLOUD_ENDPOINT    "https://mp-api.app.workbuddy.host"
-#define CLOUD_PUBLISHABLE_KEY "wbpk_NhJb648rbXrE58hc1lgpIr_g4hXEg0w3AfByZspUIif97FHbaVFRv5w"
+#define CLOUD_PUBLISHABLE_KEY "YOUR_PUBLISHABLE_KEY"
 #define CLOUD_TABLE       "bms_readings"
 
 // ===== 时序（省云服务资源点：变化上报 + 定时心跳）=====

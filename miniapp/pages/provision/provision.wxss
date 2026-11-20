@@ -5,6 +5,7 @@
 .ver-badge { font-size: 22rpx; color: #185fa5; background: #e6f1fb; padding: 6rpx 14rpx; border-radius: 20rpx; }
 .pong-ok { display: block; font-size: 24rpx; color: #0f6e56; margin-top: 12rpx; }
 .pong-wait { display: block; font-size: 24rpx; color: #b8860b; margin-top: 12rpx; }
+.link-stat { display: block; font-size: 23rpx; color: #4361aa; margin-top: 8rpx; }
 .card { margin: 0 24rpx 24rpx; padding: 28rpx; background: #ffffff; border-radius: 16rpx; }
 .card-title { font-size: 28rpx; font-weight: 500; color: #1f2329; }
 .row-between { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16rpx; }
@@ -27,6 +28,9 @@
 .bms-name { display: block; font-size: 26rpx; color: #1f2329; }
 .bms-mac { display: block; font-size: 22rpx; color: #8a8f99; margin-top: 4rpx; }
 .hint { font-size: 24rpx; color: #8a8f99; line-height: 1.6; margin-top: 12rpx; }
+.sub-title { font-size: 24rpx; color: #185fa5; font-weight: 500; margin-top: 20rpx; margin-bottom: 8rpx; }
+.mac-row { display: flex; align-items: center; gap: 12rpx; }
+.mac-input { flex: 1; margin-top: 0; }
 .selected-line { font-size: 24rpx; color: #0f6e56; margin-top: 16rpx; }
 .field { font-size: 26rpx; padding: 20rpx; background: #f5f7fa; border-radius: 12rpx; margin-top: 16rpx; }
 .log-card { margin-top: 8rpx; }

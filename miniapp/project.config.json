@@ -17,7 +17,7 @@
     "urlCheck": true
   },
   "compileType": "miniprogram",
-  "appid": "wx36c7cb7054beebe1",
+  "appid": "wxYOUR_APPID_HERE",
   "projectname": "极空电池监控",
   "miniprogramRoot": "./"
 }

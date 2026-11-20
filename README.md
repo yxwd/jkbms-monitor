@@ -58,7 +58,9 @@ pio run -e esp32c3
 
 ### 3. 导入小程序
 
-用微信开发者工具打开 `miniapp/` 目录。AppID 为 `wx36c7cb7054beebe1`（可在 `project.config.json` 修改）。`request` 合法域名需包含 `https://mp-api.app.workbuddy.host`。
+用微信开发者工具打开 `miniapp/` 目录，先在 `project.config.json` 填入你自己的 AppID。`request` 合法域名需包含 `https://mp-api.app.workbuddy.host`。
+
+首次编译前还需要在 `miniapp/utils/publicConfig.js` 和 `firmware/platformio/src/config.h` 填入你自己的 WorkBuddy 云应用配置（`resourceId` / `publishableKey` / `oauthClientId`）。本仓库为公开模板，不含真实凭证。
 
 ## 云端表
 
@@ -85,18 +87,16 @@ pio run -e esp32c3
 
 > 注意：WorkBuddy 云存储只提供登录用户最长 3600 秒的签名链接，不能作为 OTA 下载地址。
 
-### 当前已发布版本
+### 固件发布包
 
-- `v1.2.0`，版本码 `10200`
-- 下载地址：`https://jkbms-monitor.app.workbuddy.host/firmware.bin?sharecode=V477GMRG3H`
-- SHA256：`48e8df6b86f976c96c96bdae756203af4a5aedff67c17d078ba73954d7e0dd35`
-- 大小：`1184096` 字节
+`firmware/releases/` 下只保留最新版的 `v1.2.6-ota.bin`（含 SHA256 校验文件），旧版本不随仓库分发。历史版本的 bin 与 SHA256 请自行在本地留存，便于回滚。
 
-该地址由 WorkBuddy 静态托管提供，已写入云端 `bms_firmware` 表。后续新版本替换托管目录下的 `firmware.bin` 并在云端新增版本记录即可。
+实际 OTA 下载地址在云端 `bms_firmware` 表中维护，本仓库不公开托管地址与访问码。
 
 ## 安全提示
 
-- `miniapp/utils/publicConfig.js` 中的 `publishableKey` 按 WorkBuddy 设计可随小程序发布，但它允许匿名读写云端表。生产环境应接入登录并收窄 RLS 策略。
+- `miniapp/utils/publicConfig.js` 中的 `publishableKey` 按 WorkBuddy 设计可随小程序发布。本仓库为公开模板，已替换为占位符；请在自己的私有环境填入真实值。
+- 云端 `bms_firmware`（OTA 版本表）的匿名 INSERT/UPDATE/DELETE 策略已收窄，仅保留匿名 SELECT 供设备轮询。发布新版本需通过有权限的后台操作写入；`bms_readings` 仍允许匿名 INSERT（设备上报）与 SELECT。
 - 固件 `config.h` 中的 `WIFI_SSID` / `WIFI_PASSWORD` 是占位符；实际 WiFi 凭证通过 BLE 配网写入 NVRAM，不进源码。
 - 当前 BLE 配网服务无鉴权，范围内任何人都能重配设备。量产前建议增加配网口令或首次配网后锁定。
 - OTA 已做 SHA256 校验和版本号单调递增判断；仍建议使用可信 HTTPS 托管固件。

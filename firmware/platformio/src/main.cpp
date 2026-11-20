@@ -34,6 +34,13 @@ static NimBLEClient *pClient = nullptr;
 static NimBLERemoteCharacteristic *pWriteChar = nullptr;
 static NimBLERemoteCharacteristic *pNotifyChar = nullptr;
 static bool bleReady = false;
+// 采集连接健康统计（供配网 PONG/CFG 回显，验证是否反复重连）
+// 非 static：provision.h 中 PONG 回显需 extern 引用
+unsigned long statConnects = 0;   // 累计成功连接次数
+unsigned long statDrops = 0;      // 累计被动断开次数
+unsigned long statReads = 0;      // 累计读取命令次数
+static unsigned long lastConnectTry = 0; // 上次发起连接的时刻（冷却用）
+static unsigned long lastDropAt = 0;     // 上次断连时刻
 static BmsData latest;
 static BmsData reported;          // 上次成功上报的数据快照
 static bool hasReported = false;  // 是否已成功上报过
@@ -80,38 +87,44 @@ static String alarmToString(uint16_t m) {
   return s.length() ? s : "正常";
 }
 
-// offset = 0 -> JK02_24S；offset = 16（字段整体 +32 字节）-> JK02_32S
-static void parseCellInfo(const uint8_t *d, int offset, BmsData &out) {
-  out.cellCount = (offset == 0) ? 24 : 32;
-  out.protoName = (offset == 0) ? "JK02_24S" : "JK02_32S";
+// JK02 帧解析（对齐 syssi/esphome-jk-bms 权威实现）
+//   24S: 电芯 24 个，主字段偏移 0，电阻偏移 0
+//   32S: 电芯 32 个，主字段偏移 32，电阻偏移 16，MOS 温度/告警位置特殊
+// 关键：32S 的主字段偏移是 32 字节，不是 16！(之前 bug 就是只加了 16)
+static void parseCellInfo(const uint8_t *d, bool is32, BmsData &out) {
+  const int off = is32 ? 32 : 0;       // 主字段偏移（电压/电流/温度/SOC/容量...）
+  const int roff = is32 ? 16 : 0;      // 电阻字段偏移
+  out.cellCount = is32 ? 32 : 24;
+  out.protoName = is32 ? "JK02_32S" : "JK02_24S";
   out.valid = true;
+  // 单体电压固定在 6 起（两种协议一致）；电阻 24S@64 / 32S@80
   for (uint8_t i = 0; i < out.cellCount; i++) {
     out.cells[i] = u16(d, 6 + i * 2) * 0.001f;
-    out.resist[i] = u16(d, 64 + offset + i * 2) * 0.001f;
+    out.resist[i] = u16(d, 64 + roff + i * 2) * 0.001f;
   }
-  out.totalVoltage = u32(d, 118 + offset) * 0.001f;
-  out.current = (int32_t)u32(d, 126 + offset) * 0.001f;
+  out.totalVoltage = u32(d, 118 + off) * 0.001f;          // 24S@118 / 32S@150
+  out.current = (int32_t)u32(d, 126 + off) * 0.001f;      // 24S@126 / 32S@158
   out.power = out.totalVoltage * out.current;
-  out.temps[0] = (int16_t)u16(d, 130 + offset) * 0.1f;
-  out.temps[1] = (int16_t)u16(d, 132 + offset) * 0.1f;
-  if (offset == 0) {
-    out.temps[2] = (int16_t)u16(d, 134) * 0.1f;                    // MOS 温度
-    out.alarms = (uint16_t)d[136] << 8 | d[137];
+  out.temps[0] = (int16_t)u16(d, 130 + off) * 0.1f;       // 24S@130 / 32S@162
+  out.temps[1] = (int16_t)u16(d, 132 + off) * 0.1f;       // 24S@132 / 32S@164
+  if (!is32) {
+    out.temps[2] = (int16_t)u16(d, 134) * 0.1f;           // 24S MOS 温度 @134
+    out.alarms = (uint16_t)d[136] << 8 | d[137];          // 24S 告警 @136
   } else {
-    out.temps[2] = (int16_t)u16(d, 112 + offset) * 0.1f;           // 32S 的 MOS 温度位置不同
-    out.alarms = (uint16_t)d[134 + offset] << 8 | d[135 + offset];
+    out.temps[2] = (int16_t)u16(d, 112 + off) * 0.1f;     // 32S MOS 温度 @144
+    out.alarms = (uint16_t)u32(d, 134 + off);             // 32S 告警 @166 (32位，取低16)
   }
-  out.temps[3] = u16(d, 222 + offset) * 0.1f;
-  out.temps[4] = u16(d, 224 + offset) * 0.1f;
-  out.balancing = d[140 + offset];
-  out.soc = d[141 + offset];
-  out.capRemain = u32(d, 142 + offset) * 0.001f;
-  out.nomCap = u32(d, 146 + offset) * 0.001f;
-  out.cycles = u32(d, 150 + offset);
-  out.soh = d[158 + offset];
-  out.runtime = u32(d, 162 + offset);
-  out.chargeMos = d[166 + offset] != 0;
-  out.dischargeMos = d[167 + offset] != 0;
+  out.temps[3] = u16(d, 222 + off) * 0.1f;
+  out.temps[4] = u16(d, 224 + off) * 0.1f;
+  out.balancing = d[140 + off];                           // 24S@140 / 32S@172
+  out.soc = d[141 + off];                                 // 24S@141 / 32S@173
+  out.capRemain = u32(d, 142 + off) * 0.001f;             // 24S@142 / 32S@174
+  out.nomCap = u32(d, 146 + off) * 0.001f;                // 24S@146 / 32S@178
+  out.cycles = u32(d, 150 + off);                         // 24S@150 / 32S@182
+  out.soh = d[158 + off];                                 // 24S@158 / 32S@190
+  out.runtime = u32(d, 162 + off);                        // 24S@162 / 32S@194
+  out.chargeMos = d[166 + off] != 0;                      // 24S@166 / 32S@198
+  out.dischargeMos = d[167 + off] != 0;                   // 24S@167 / 32S@199
   out.alarmText = alarmToString(out.alarms);
 }
 
@@ -132,28 +145,47 @@ static void onNotifyData(uint8_t *data, size_t len) {
     return;
   }
 
-  BmsData guess;
-  int offset = 0;
+  bool is32 = false;
   if (PROTOCOL_MODE == 1) {
-    offset = 0;
+    is32 = false;
   } else if (PROTOCOL_MODE == 2) {
-    offset = 16;
+    is32 = true;
   } else {
-    parseCellInfo(raw, 0, guess);
-    uint8_t n = 0;
-    for (int i = 0; i < 24; i++) if (guess.cells[i] > 0) n++;
-    if (!(guess.totalVoltage > 10 && guess.totalVoltage < 150 && n >= 8)) offset = 16;
+    // 自动识别：分别按两种布局解析，取总电压合理(10~150V)的那个。
+    // 32S 帧字段在 24S 位置读到的是错乱值(0 或超大)，电压不会落在合理区间。
+    BmsData g24, g32;
+    parseCellInfo(raw, false, g24);
+    parseCellInfo(raw, true, g32);
+    bool ok24 = (g24.totalVoltage > 10 && g24.totalVoltage < 150);
+    bool ok32 = (g32.totalVoltage > 10 && g32.totalVoltage < 150);
+    if (ok32 && !ok24) is32 = true;
+    else if (ok24 && !ok32) is32 = false;
+    else if (ok24 && ok32) {
+      // 两者都合理时用 SOC(0~100) 与容量合理性二次判定
+      bool good24 = (g24.soc <= 100 && g24.capRemain < 5000 && g24.nomCap < 5000);
+      bool good32 = (g32.soc <= 100 && g32.capRemain < 5000 && g32.nomCap < 5000);
+      is32 = (good32 && !good24) || (good32 && good24 && g32.cycles < 100000);
+    } else {
+      // 都不合理：默认按帧电芯槽位多的（32S），保证大容量板可解析
+      is32 = true;
+    }
   }
-  parseCellInfo(raw, offset, latest);
+  parseCellInfo(raw, is32, latest);
   hasNewData = true;
   frameBuf.clear();
 }
 
 class BleClientCb : public NimBLEClientCallbacks {
-  void onDisconnect(NimBLEClient *, int) override {
+  void onDisconnect(NimBLEClient *, int reason) override {
+    if (bleReady) {           // 只统计"已建立的连接"断开，排除连接失败时的清理性断开
+      statDrops++;
+      lastDropAt = millis();
+      Serial.printf("BMS link dropped (reason=%d, #%lu)\n", reason, statDrops);
+    }
     bleReady = false;
     pWriteChar = nullptr;
     pNotifyChar = nullptr;
+    // 不删除 client：下次复用同一个句柄重连，避免反复 create/delete 触发保护板滴声
   }
 };
 
@@ -199,9 +231,21 @@ static bool connectBms() {
     if (!found) return false;
   }
 
-  pClient = NimBLEDevice::createClient();
-  pClient->setClientCallbacks(new BleClientCb());
-  if (!pClient->connect(addr)) return false;
+  lastConnectTry = millis();
+  // 复用 client：只在首次创建。反复 create/delete 会让保护板每次都当作新连接"滴"一声。
+  if (!pClient) {
+    pClient = NimBLEDevice::createClient();
+    pClient->setClientCallbacks(new BleClientCb());
+  }
+  // 若句柄仍在连接中（如 subscribe 前状态残留），先清干净再重连
+  if (pClient->isConnected()) pClient->disconnect();
+  if (!pClient->connect(addr)) {
+    Serial.println("BMS connect failed");
+    return false;
+  }
+  // 请求延长 supervision timeout（4s），减少因瞬时干扰/射频争用被误断开
+  pClient->updateConnParams(0x06, 0x0C, 0, 400);
+
   NimBLERemoteService *svc = pClient->getService(NimBLEUUID((uint16_t)0xFFE0));
   if (!svc) { pClient->disconnect(); return false; }
 
@@ -219,9 +263,12 @@ static bool connectBms() {
     onNotifyData(data, len);
   }, false);
   bleReady = true;
+  statConnects++;
+  Serial.printf("BMS connected (#%lu, drops=%lu)\n", statConnects, statDrops);
   writeCommand(0x97);              // 设备信息
   delay(200);
   writeCommand(0x96);              // 电池信息
+  statReads += 2;
   lastCmd = millis();
   return true;
 }
@@ -329,15 +376,24 @@ void loop() {
   if (!bleReady) {
     // 未绑定保护板时不主动扫描，避免与配网争用 BLE；等待小程序绑定 MAC
     if (gCfg.hasBms()) {
-      if (connectBms()) Serial.println("BMS connected");
-      else delay(1000);
+      // 断连冷却：刚掉线/刚失败后等一会儿再连，避免反复连接让保护板一直"滴"
+      if (millis() - lastConnectTry >= BMS_RECONNECT_COOLDOWN_MS) {
+        connectBms();
+      }
+      delay(200);
     } else {
       delay(200);
     }
   } else if (pClient && !pClient->isConnected()) {
+    // 链路真的断了（onDisconnect 回调也会置 bleReady=false，这里是兜底双保险）
+    if (!statDrops || millis() - lastDropAt > 500) { statDrops++; lastDropAt = millis(); }
     bleReady = false;
+    pWriteChar = nullptr;
+    pNotifyChar = nullptr;
   } else if (millis() - lastCmd > BLE_CMD_INTERVAL_MS) {
+    // 连接保持中：只复用链路周期读取，绝不重复连接/断开
     writeCommand(0x96);
+    statReads++;
     lastCmd = millis();
   }
 

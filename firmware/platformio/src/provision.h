@@ -11,6 +11,9 @@
 #define PROV_NOTIFY_UUID  "0000FFF2-0000-1000-8000-00805F9B34FB"
 // FW_VERSION 统一在 config.h 定义，OTA 与配网共用
 
+// 采集链路统计（main.cpp 定义），PONG/CFG 回显供小程序验证连接复用
+extern unsigned long statConnects, statDrops, statReads;
+
 static NimBLECharacteristic *pProvWrite = nullptr;
 static NimBLECharacteristic *pProvNotify = nullptr;
 
@@ -99,8 +102,12 @@ static String wifiStateText() {
   return "IDLE";
 }
 
-// 执行扫描并在 loop 中发送结果
+// 执行扫描并在 loop 中发送结果（带逐台诊断日志，方便调试为什么没匹配到保护板）
 static void doScanAndReply() {
+  // 起始提示：让用户/小程序知道 ESP32 确实开始扫描了（扫描期间主循环阻塞 10 秒无其他回显）
+  provSend("SCANLOG|start");
+  Serial.println("[SCAN] start, duration=" + String(BLE_SCAN_SECONDS) + "s");
+
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
   scan->setInterval(100);
@@ -108,26 +115,55 @@ static void doScanAndReply() {
   scan->start(BLE_SCAN_SECONDS, false);
   NimBLEScanResults results = scan->getResults();
 
-  String out = "BMS_LIST";
+  String out = "BMS_LIST";           // 原有结果消息，保持协议不变
+  String rows = "";                  // 诊断明细行（纯 ASCII，避免中文跨帧解码问题）
   NimBLEUUID svcUuid((uint16_t)0xFFE0);
-  for (int i = 0; i < (int)results.getCount(); i++) {
+  const int total = results.getCount();
+  int hit = 0, shown = 0;
+  for (int i = 0; i < total; i++) {
     const NimBLEAdvertisedDevice *d = results.getDevice(i);
     if (!d) continue;
-    bool match = false;
-    if (d->haveServiceUUID()) match = d->isAdvertisingService(svcUuid);
-    String name = d->haveName() ? String(d->getName().c_str()) : String("");
-    if (name.indexOf("JK") >= 0 || name.indexOf("BMS") >= 0) match = true;
-    if (!match) continue;
+    bool svcHit = false;
+    if (d->haveServiceUUID()) svcHit = d->isAdvertisingService(svcUuid);
+    String nameFull = d->haveName() ? String(d->getName().c_str()) : String("");
+    bool nameHit = (nameFull.indexOf("JK") >= 0 || nameFull.indexOf("BMS") >= 0);
+    bool match = svcHit || nameHit;
+    int rssi = d->getRSSI();
     String mac = String(d->getAddress().toString().c_str());
-    out += ",";
-    out += mac;
-    out += "|";
-    out += String(d->getRSSI());
-    out += "|";
-    out += name;
-    if (out.length() > 7000) break;  // 防超长
+    String nameShort = nameFull.length() ? nameFull : String("(noname)");
+    if (nameShort.length() > 16) nameShort = nameShort.substring(0, 16);
+    String mac6 = mac.length() >= 8 ? mac.substring(mac.length() - 8) : mac;
+
+    // 串口详细日志
+    Serial.println("[SCAN] #" + String(i + 1) + " " + nameFull + " " + mac +
+                   " rssi=" + String(rssi) + " svc=" + (svcHit ? "Y" : "N") +
+                   " name=" + (nameHit ? "Y" : "N") + " -> " + (match ? "HIT" : "skip"));
+
+    if (match) {
+      hit++;
+      out += ",";
+      out += mac;
+      out += "|";
+      out += String(rssi);
+      out += "|";
+      out += nameFull;
+      if (out.length() > 7000) break;  // 防超长
+    }
+    // 诊断行：序号|名字|MAC后8位|RSSI|svc命中|name命中|最终判定
+    // 限制 24 行，防止分片数超过协议上限（6位序号=64帧）
+    if (shown < 24) {
+      rows += String(i + 1) + "|" + nameShort + "|" + mac6 + "|" + String(rssi) +
+              "|" + (svcHit ? "Y" : "N") + "|" + (nameHit ? "Y" : "N") +
+              "|" + (match ? "HIT" : "skip") + "\n";
+      shown++;
+    }
   }
-  provSend(out);
+
+  // 诊断汇总：首行 total|hit，其后每行一台设备
+  String diag = "SCANLOG|" + String(total) + "|" + String(hit) + "\n" + rows;
+  provSend(diag);       // 逐台诊断发给小程序日志区
+  provSend(out);        // 原有 BMS_LIST，保持兼容
+  Serial.println("[SCAN] done: total=" + String(total) + " hit=" + String(hit));
 }
 
 // 解析带转义的逗号分隔参数（\, 表示字面逗号）
@@ -156,12 +192,15 @@ static void handleCommand(const String &msg) {
   const String cmd = a[0];
 
   if (cmd == "PING") {
-    queueReply(String("PONG,") + FW_VERSION + "," + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("NONE")));
+    // 附带采集链路统计：C=成功连接次数 D=断连次数 R=读取次数，便于验证"连接复用、不反复重连"
+    queueReply(String("PONG,") + FW_VERSION + "," + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("NONE")) +
+               ",C" + String(statConnects) + "/D" + String(statDrops) + "/R" + String(statReads));
   } else if (cmd == "SCAN_BMS") {
     _scanRequested = true;
     // 扫描完成后在 loop 中回复 BMS_LIST
   } else if (cmd == "GET_CFG") {
-    queueReply(String("CFG,") + gCfg.ssid + "," + gCfg.bmsMac + "," + gCfg.deviceId + "," + wifiStateText());
+    queueReply(String("CFG,") + gCfg.ssid + "," + gCfg.bmsMac + "," + gCfg.deviceId + "," + wifiStateText() +
+               ",C" + String(statConnects) + "/D" + String(statDrops) + "/R" + String(statReads));
   } else if (cmd == "SET_WIFI" && a.size() >= 3) {
     gCfg.ssid = a[1];
     gCfg.pass = a[2];

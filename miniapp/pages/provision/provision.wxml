@@ -7,6 +7,7 @@
     <text class="intro-sub">扫描并连接 ESP32 · 绑定保护板 · 配置 WiFi</text>
     <text wx:if="{{pongOk}}" class="pong-ok">✓ 已收到设备 PONG · 通信正常</text>
     <text wx:elif="{{bleReady}}" class="pong-wait">… 等待设备 PONG（超时将主动读取）</text>
+    <text wx:if="{{linkStat}}" class="link-stat">采集链路 · {{linkStat}}</text>
   </view>
 
   <view class="card">
@@ -30,8 +31,28 @@
     <view class="card">
       <view class="row-between">
         <text class="card-title">步骤 2 · 绑定保护板</text>
-        <button class="mini" bindtap="scanBms">扫描附近保护板</button>
+        <button class="mini" bindtap="scanBms">让设备扫描</button>
       </view>
+      <view class="hint">三种方式选 MAC（按 MAC 精确直连，不依赖设备扫描）：① 下方「手机扫到的设备」点选（推荐）② 手动填序列号/MAC ③ 设备扫描结果</view>
+
+      <!-- 方式①：手机步骤1扫到的设备，deviceId 即 BLE MAC（极空板广播名常是序列号） -->
+      <view wx:if="{{devices.length}}" class="sub-title">手机扫到的设备（点选MAC）</view>
+      <view wx:if="{{devices.length}}" class="dev-list">
+        <view wx:for="{{devices}}" wx:key="deviceId" class="dev-item {{selectedMac===item.deviceId?'dev-target':''}}" bindtap="bindFromPhone" data-mac="{{item.deviceId}}">
+          <text class="dev-name">{{item.rssi >= -70 ? '◇ ' : ''}}{{item.name}}</text>
+          <text class="bms-mac">{{item.deviceId}}</text>
+        </view>
+      </view>
+
+      <!-- 方式②：手动填 MAC（必须标准格式，序列号不能直连） -->
+      <view class="sub-title">手动填 MAC（须 AA:BB:CC:DD:EE:FF 格式）</view>
+      <view class="mac-row">
+        <input class="field mac-input" placeholder="序列号仅用于在上方认设备，此处填MAC" value="{{manualMac}}" bindinput="onManualMac"/>
+        <button class="mini" bindtap="bindManualMac">填入</button>
+      </view>
+
+      <!-- 方式③：设备端扫描结果 -->
+      <view wx:if="{{bmsList.length}}" class="sub-title">设备扫描结果</view>
       <view wx:if="{{bmsList.length}}" class="bms-list">
         <view wx:for="{{bmsList}}" wx:key="mac" class="bms-item {{selectedMac===item.mac?'selected':''}}" bindtap="selectBms" data-mac="{{item.mac}}">
           <view class="bms-info">
@@ -41,8 +62,10 @@
           <text class="bms-rssi">{{item.rssi}} dBm</text>
         </view>
       </view>
-      <view wx:else class="hint">点击"扫描附近保护板"，选择要绑定的那块（按 MAC 精确锁定，不会连错）</view>
-      <view wx:if="{{selectedMac}}" class="selected-line">已选：{{selectedMac}}</view>
+
+      <view wx:if="{{selectedMac}}" class="selected-line">待绑定 MAC：{{selectedMac}}</view>
+      <button class="secondary" bindtap="saveBms">确认绑定到设备</button>
+      <view class="hint">绑定后点底部「保存并重启」，ESP32 会按此 MAC 直连保护板采集数据。</view>
     </view>
 
     <view class="card">

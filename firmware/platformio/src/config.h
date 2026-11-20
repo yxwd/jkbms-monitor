@@ -15,13 +15,13 @@
 
 // ===== WorkBuddy 云服务 =====
 #define CLOUD_ENDPOINT    "https://mp-api.app.workbuddy.host"
-#define CLOUD_PUBLISHABLE_KEY "wbpk_NhJb648rbXrE58hc1lgpIr_g4hXEg0w3AfByZspUIif97FHbaVFRv5w"
+#define CLOUD_PUBLISHABLE_KEY "YOUR_PUBLISHABLE_KEY"
 #define CLOUD_TABLE       "bms_readings"
 
 // ===== 固件版本 / OTA =====
 // 每次改固件都要同步递增，否则设备不会认为有新版本
-#define FW_VERSION        "1.2.3"
-#define FW_VERSION_CODE   10203
+#define FW_VERSION        "1.2.6"
+#define FW_VERSION_CODE   10206
 // 每 5 分钟检查一次云端版本（复用已连接的 WiFi，不额外唤醒）
 #define OTA_CHECK_INTERVAL_MS 300000
 
@@ -32,6 +32,9 @@
 #define CHANGE_REPORT_MIN_MS    10000
 // BLE 采集间隔（读本地 BLE，不消耗云资源，保持 5 秒）
 #define BLE_CMD_INTERVAL_MS     5000
+// 采集连接复用：连接建立后持续读取，只有真正断开且冷却后才重连。
+// 断连后至少等待这么久再重连，避免保护板被反复连接发出"滴"声。
+#define BMS_RECONNECT_COOLDOWN_MS 3000
 // 扫描极空板的时长
 #define BLE_SCAN_SECONDS        10
 
